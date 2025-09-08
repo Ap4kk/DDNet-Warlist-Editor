@@ -10,17 +10,18 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QTextEdit, QPushButton, QMessageBox, QRadioButton,
-    QComboBox, QGroupBox, QFormLayout, QCheckBox, QSizePolicy, QSpacerItem
+    QLabel, QLineEdit, QPlainTextEdit, QTextEdit, QPushButton, QMessageBox, QRadioButton,
+    QComboBox, QGroupBox, QFormLayout, QCheckBox, QSizePolicy, QSpacerItem, QSplitter
 )
 
 __version__ = "v1.1"
 REPO_API_LATEST = "https://api.github.com/repos/Ap4kk/DDNet-Warlist-Editor/releases/latest"
 REPO_PAGE = "https://github.com/Ap4kk/DDNet-Warlist-Editor"
 
+# TRANSLATIONS kept identical to original for brevity
 TRANSLATIONS = {
     "en": {
         "title": "DDNet Warlist Editor",
@@ -119,6 +120,8 @@ def t(key: str, lang: str = "en") -> str:
     return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
 
 
+# --- utility functions (kept unchanged) ---
+
 def quote_field(s: str) -> str:
     if s is None:
         s = ""
@@ -192,186 +195,255 @@ def check_github_latest(timeout=6):
         return False, f'Unexpected error: {e}'
 
 
+# --- Redesigned UI ---
 class WarlistEditor(QWidget):
     def __init__(self):
         super().__init__()
         self.lang = "ru"
         self.theme = "dark"
         self.setWindowTitle(f'{t("title", self.lang)} - {__version__}')
-        self.resize(1100, 800)
+        self.resize(1100, 750)
+        self._last_backup = None
         self._build_ui()
         threading.Thread(target=self._bg_check_update, daemon=True).start()
 
     def _build_ui(self):
-        self.setStyleSheet("")
-        main_layout = QVBoxLayout()
+        # top-level layout
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
 
+        # header area: title + quick actions
         header = QHBoxLayout()
-        self.title_label = QLabel(t("title", self.lang))
-        self.title_label.setFont(QFont('Segoe UI', 16, QFont.Bold))
-        header.addWidget(self.title_label)
-        header.addStretch()
+        title = QLabel(t('title', self.lang))
+        # slightly smaller title for compactness
+        title.setFont(QFont('Segoe UI', 16, QFont.Bold))
+        title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        header.addWidget(title)
 
-        self.version_label = QLabel(f"{__version__}")
-        header.addWidget(self.version_label)
+        ver = QLabel(__version__)
+        ver.setToolTip('Version')
+        ver.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        ver.setFixedWidth(48)
+        header.addWidget(ver)
 
-        settings_group = QGroupBox(t("settings", self.lang))
-        settings_layout = QHBoxLayout()
+        # compact settings area: smaller height, stacked compact controls
+        settings_box = QWidget()
+        settings_layout = QVBoxLayout()
+        settings_layout.setContentsMargins(4, 4, 4, 4)
+        settings_layout.setSpacing(4)
+        settings_box.setLayout(settings_layout)
+        settings_box.setFixedHeight(56)
 
-        settings_layout.addWidget(QLabel(t("language", self.lang)))
+        # top row: small labels for context (optional)
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(6)
+        top_row.addStretch()
+        settings_layout.addLayout(top_row)
+
+        # bottom row: compact combos aligned to the right
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(0, 0, 0, 0)
+        bottom_row.setSpacing(6)
+
+        lbl_lang = QLabel(t('language', self.lang))
+        lbl_lang.setFixedHeight(20)
+        bottom_row.addWidget(lbl_lang)
         self.lang_combo = QComboBox()
         self.lang_combo.addItems(["Русский", "English"])
-        self.lang_combo.setCurrentIndex(0 if self.lang == "ru" else 1)
+        self.lang_combo.setCurrentIndex(0 if self.lang == 'ru' else 1)
         self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
-        settings_layout.addWidget(self.lang_combo)
+        self.lang_combo.setFixedWidth(120)
+        self.lang_combo.setFixedHeight(24)
+        bottom_row.addWidget(self.lang_combo)
 
-        settings_layout.addSpacing(10)
-        settings_layout.addWidget(QLabel(t("theme", self.lang)))
+        lbl_theme = QLabel(t('theme', self.lang))
+        lbl_theme.setFixedHeight(20)
+        bottom_row.addWidget(lbl_theme)
         self.theme_combo = QComboBox()
-        self.theme_combo.addItems([t("theme_dark", self.lang), t("theme_light", self.lang)])
-        self.theme_combo.setCurrentIndex(0 if self.theme == "dark" else 1)
+        self.theme_combo.addItems([t('theme_dark', self.lang), t('theme_light', self.lang)])
+        self.theme_combo.setCurrentIndex(0 if self.theme == 'dark' else 1)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        settings_layout.addWidget(self.theme_combo)
-        settings_layout.addStretch()
+        self.theme_combo.setFixedWidth(120)
+        self.theme_combo.setFixedHeight(24)
+        bottom_row.addWidget(self.theme_combo)
 
-        settings_group.setLayout(settings_layout)
+        bottom_row.addStretch()
+        settings_layout.addLayout(bottom_row)
 
-        main_layout.addLayout(header)
-        main_layout.addWidget(settings_group)
+        # give settings a compact visual separation
+        header.addWidget(settings_box)
 
-        top_group = QGroupBox()
-        top_group_layout = QHBoxLayout()
-        self.lbl_client = QLabel(t("client", self.lang))
-        top_group_layout.addWidget(self.lbl_client)
+        root.addLayout(header)
+
+        # central area: left form, right log/preview split
+        splitter = QSplitter(Qt.Horizontal)
+
+        # left panel - compact form
+        left_widget = QWidget()
+        left_layout = QVBoxLayout()
+        left_layout.setContentsMargins(6, 6, 6, 6)
+        left_layout.setSpacing(10)
+
+        # file / client row
+        file_group = QGroupBox()
+        file_layout = QHBoxLayout()
+        file_layout.setContentsMargins(6, 6, 6, 6)
+        file_layout.setSpacing(8)
+
+        self.lbl_client = QLabel(t('client', self.lang))
+        file_layout.addWidget(self.lbl_client)
         self.client_combo = QComboBox()
         self.client_combo.addItems(['Tater Client', 'Cactus Client'])
         self.client_combo.currentIndexChanged.connect(self._on_client_changed)
-        top_group_layout.addWidget(self.client_combo)
+        file_layout.addWidget(self.client_combo)
 
-        top_group_layout.addSpacing(8)
-        self.lbl_path = QLabel(t("path", self.lang))
-        top_group_layout.addWidget(self.lbl_path)
+        file_layout.addStretch()
+        self.lbl_path = QLabel(t('path', self.lang))
+        file_layout.addWidget(self.lbl_path)
         self.path_edit = QLineEdit()
         self._set_path_placeholder()
-        top_group_layout.addWidget(self.path_edit, stretch=2)
-
-        self.browse_btn = QPushButton(t("choose_file", self.lang))
+        file_layout.addWidget(self.path_edit, stretch=2)
+        self.browse_btn = QPushButton(t('choose_file', self.lang))
         self.browse_btn.clicked.connect(self.browse_file)
-        top_group_layout.addWidget(self.browse_btn)
-        top_group.setLayout(top_group_layout)
-        main_layout.addWidget(top_group)
+        self.browse_btn.setFixedHeight(28)
+        file_layout.addWidget(self.browse_btn)
+        file_group.setLayout(file_layout)
+        left_layout.addWidget(file_group)
 
-        self.mode_group_box = QGroupBox(t("mode", self.lang))
+        # mode selection
+        mode_box = QGroupBox(t('mode', self.lang))
         mode_layout = QHBoxLayout()
-        self.single_radio = QRadioButton(t("single", self.lang))
-        self.multi_radio = QRadioButton(t("multi", self.lang))
+        self.single_radio = QRadioButton(t('single', self.lang))
+        self.multi_radio = QRadioButton(t('multi', self.lang))
         self.single_radio.setChecked(True)
         self.single_radio.toggled.connect(self._update_mode)
         mode_layout.addWidget(self.single_radio)
         mode_layout.addWidget(self.multi_radio)
         mode_layout.addStretch()
-        self.mode_group_box.setLayout(mode_layout)
-        main_layout.addWidget(self.mode_group_box)
+        mode_box.setLayout(mode_layout)
+        left_layout.addWidget(mode_box)
 
-        self.single_box = QGroupBox(t("single", self.lang))
+        # stacked-like area: single / multi
+        # single
+        single_box = QGroupBox(t('single', self.lang))
         single_form = QFormLayout()
         self.single_nick = QLineEdit()
-        self.single_nick.setPlaceholderText(t("nick", self.lang) + " (например: Player123)")
+        self.single_nick.setPlaceholderText(t('nick', self.lang) + ' (например: Player123)')
         self.single_clan = QLineEdit()
-        self.single_clan.setPlaceholderText(t("clan", self.lang))
+        self.single_clan.setPlaceholderText(t('clan', self.lang))
         self.single_reason = QLineEdit()
-        self.single_reason.setPlaceholderText(t("reason", self.lang))
-        self.lbl_single_nick = QLabel(t("nick", self.lang))
-        self.lbl_single_clan = QLabel(t("clan", self.lang))
-        self.lbl_single_reason = QLabel(t("reason", self.lang))
-        single_form.addRow(self.lbl_single_nick, self.single_nick)
-        single_form.addRow(self.lbl_single_clan, self.single_clan)
-        single_form.addRow(self.lbl_single_reason, self.single_reason)
-        self.single_box.setLayout(single_form)
-        main_layout.addWidget(self.single_box)
+        self.single_reason.setPlaceholderText(t('reason', self.lang))
+        single_form.addRow(QLabel(t('nick', self.lang)), self.single_nick)
+        single_form.addRow(QLabel(t('clan', self.lang)), self.single_clan)
+        single_form.addRow(QLabel(t('reason', self.lang)), self.single_reason)
+        single_box.setLayout(single_form)
+        left_layout.addWidget(single_box)
 
-        self.multi_box = QGroupBox(t("multi", self.lang))
-        multi_layout = QVBoxLayout()
+        # multi
+        multi_box = QGroupBox(t('multi', self.lang))
+        multi_v = QVBoxLayout()
         multi_top = QHBoxLayout()
-        self.multi_text = QTextEdit()
-        self.multi_text.setFixedHeight(120)
-        self.multi_text.setPlaceholderText(t("multi_hint", self.lang))
+        self.multi_text = QPlainTextEdit()
+        self.multi_text.setPlaceholderText(t('multi_hint', self.lang))
+        self.multi_text.setFixedHeight(110)
         self.multi_text.textChanged.connect(self._on_multi_text_changed)
         multi_top.addWidget(self.multi_text, stretch=3)
 
         right_col = QVBoxLayout()
         self.multi_reason = QLineEdit()
-        self.multi_reason.setPlaceholderText(t("reason", self.lang))
-        self.lbl_multi_reason = QLabel(t("multi_reason_label", self.lang))
-        right_col.addWidget(self.lbl_multi_reason)
+        self.multi_reason.setPlaceholderText(t('reason', self.lang))
+        right_col.addWidget(QLabel(t('multi_reason_label', self.lang)))
         right_col.addWidget(self.multi_reason)
         right_col.addSpacing(6)
-        self.lbl_multi_clan = QLabel(t("multi_clan_label", self.lang))
-        right_col.addWidget(self.lbl_multi_clan)
+        right_col.addWidget(QLabel(t('multi_clan_label', self.lang)))
         self.multi_clan = QLineEdit()
-        self.multi_clan.setPlaceholderText(t("multi_clan_label", self.lang))
+        self.multi_clan.setPlaceholderText(t('multi_clan_label', self.lang))
         self.multi_clan.textChanged.connect(self._on_multi_clan_changed)
         right_col.addWidget(self.multi_clan)
         right_col.addStretch()
         multi_top.addLayout(right_col, stretch=1)
 
-        multi_layout.addLayout(multi_top)
-        self.multi_box.setLayout(multi_layout)
-        main_layout.addWidget(self.multi_box)
+        multi_v.addLayout(multi_top)
+        multi_box.setLayout(multi_v)
+        left_layout.addWidget(multi_box)
 
-        opts_box = QGroupBox()
-        opts_layout = QHBoxLayout()
-        self.lbl_group = QLabel(t("group", self.lang))
-        opts_layout.addWidget(self.lbl_group)
+        # options + buttons row
+        opts = QHBoxLayout()
+        self.lbl_group = QLabel(t('group', self.lang))
+        opts.addWidget(self.lbl_group)
         self.group_box = QComboBox()
         self.group_box.addItems(['enemy', 'team'])
-        opts_layout.addWidget(self.group_box)
-        self.backup_checkbox = QCheckBox(t("backup", self.lang))
+        opts.addWidget(self.group_box)
+        self.backup_checkbox = QCheckBox(t('backup', self.lang))
         self.backup_checkbox.setChecked(True)
-        opts_layout.addWidget(self.backup_checkbox)
-        opts_layout.addStretch()
-        opts_box.setLayout(opts_layout)
-        main_layout.addWidget(opts_box)
+        opts.addWidget(self.backup_checkbox)
+        opts.addStretch()
 
-        btn_layout = QHBoxLayout()
-        self.preview_btn = QPushButton(t("preview", self.lang))
+        # action buttons with larger sizes
+        self.preview_btn = QPushButton(t('preview', self.lang))
         self.preview_btn.clicked.connect(self.preview)
-        self.add_btn = QPushButton(t("add", self.lang))
+        self.preview_btn.setFixedHeight(34)
+        self.add_btn = QPushButton(t('add', self.lang))
         self.add_btn.clicked.connect(self.add_to_file)
-        self.undo_btn = QPushButton(t("undo", self.lang))
+        self.add_btn.setFixedHeight(34)
+        self.undo_btn = QPushButton(t('undo', self.lang))
         self.undo_btn.clicked.connect(self.undo_last)
-        self.update_btn = QPushButton(t("check_updates", self.lang))
-        self.update_btn.clicked.connect(
-            lambda: threading.Thread(target=self._check_update_and_notify, daemon=True).start())
+        self.update_btn = QPushButton(t('check_updates', self.lang))
+        self.update_btn.clicked.connect(lambda: threading.Thread(target=self._check_update_and_notify, daemon=True).start())
 
-        btn_layout.addWidget(self.preview_btn)
-        btn_layout.addWidget(self.add_btn)
-        btn_layout.addWidget(self.undo_btn)
-        btn_layout.addWidget(self.update_btn)
-        btn_layout.addStretch()
-        main_layout.addLayout(btn_layout)
+        opts.addWidget(self.preview_btn)
+        opts.addWidget(self.add_btn)
+        opts.addWidget(self.undo_btn)
+        opts.addWidget(self.update_btn)
+        left_layout.addLayout(opts)
 
-        self.lbl_log = QLabel(t("log_preview", self.lang))
-        main_layout.addWidget(self.lbl_log)
+        left_layout.addStretch()
+        left_widget.setLayout(left_layout)
+
+        # right panel - log / preview
+        right_widget = QWidget()
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(6, 6, 6, 6)
+        right_layout.setSpacing(8)
+        self.lbl_log = QLabel(t('log_preview', self.lang))
+        right_layout.addWidget(self.lbl_log)
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setFixedHeight(220)
-        main_layout.addWidget(self.log)
+        self.log.setLineWrapMode(QTextEdit.NoWrap)
+        right_layout.addWidget(self.log)
 
+        # footer hint at bottom of right panel
         footer = QHBoxLayout()
-        self.watermark = QLabel(t("byline", self.lang))
+        self.watermark = QLabel(t('byline', self.lang))
         footer.addWidget(self.watermark)
         footer.addStretch()
-        self.help_label = QLabel(t("footer_hint", self.lang))
+        self.help_label = QLabel(t('footer_hint', self.lang))
         footer.addWidget(self.help_label)
-        main_layout.addLayout(footer)
+        right_layout.addLayout(footer)
 
-        self.setLayout(main_layout)
+        right_widget.setLayout(right_layout)
+
+        # put widgets into splitter
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([420, 640])
+
+        root.addWidget(splitter)
+
+        # keyboard shortcuts for power users
+        QShortcut(QKeySequence('Ctrl+P'), self, activated=self.preview)
+        QShortcut(QKeySequence('Ctrl+Return'), self, activated=self.add_to_file)
+        QShortcut(QKeySequence('Ctrl+Z'), self, activated=self.undo_last)
 
         self._update_mode()
         self._on_client_changed()
         self.apply_theme()
 
+    # --- keep existing helper methods mostly unchanged ---
     def _set_path_placeholder(self):
         if self._is_cactus():
             self.path_edit.setPlaceholderText(str(Path.home() / "AppData" / "Roaming" / "DDNet" / "cactus.sqlite3"))
@@ -433,11 +505,11 @@ class WarlistEditor(QWidget):
     def browse_file(self):
         if self._is_cactus():
             start = str(Path.home() / "AppData" / "Roaming" / "DDNet")
-            path, _ = QFileDialog.getOpenFileName(self, t("choose_file", self.lang), start,
+            path, _ = QFileDialog.getOpenFileName(self, t('choose_file', self.lang), start,
                                                   "SQLite DB (*.sqlite3 *.db *.sqlite);;All Files (*)")
         else:
             start = str(Path.home() / "AppData" / "Roaming" / "DDNet")
-            path, _ = QFileDialog.getOpenFileName(self, t("choose_file", self.lang), start,
+            path, _ = QFileDialog.getOpenFileName(self, t('choose_file', self.lang), start,
                                                   "Config Files (*.cfg *.txt);;All Files (*)")
         if path:
             self.path_edit.setText(path)
@@ -450,12 +522,12 @@ class WarlistEditor(QWidget):
             clan = self.single_clan.text().strip() if not self._is_cactus() else ''
             reason = self.single_reason.text().strip()
             if not nick and not clan:
-                raise ValueError(t("preview_no_nicks_or_clan", self.lang))
+                raise ValueError(t('preview_no_nicks_or_clan', self.lang))
             entries.append((nick, clan, reason))
         else:
             raw = self.multi_text.toPlainText().strip()
             if not raw and not (self.multi_clan.text().strip() and not self._is_cactus()):
-                raise ValueError(t("preview_no_nicks_or_clan", self.lang))
+                raise ValueError(t('preview_no_nicks_or_clan', self.lang))
             parsed = []
             if raw:
                 try:
@@ -500,13 +572,13 @@ class WarlistEditor(QWidget):
         try:
             group, entries = self._gather_entries()
         except Exception as e:
-            QMessageBox.critical(self, t("error", self.lang), str(e))
+            QMessageBox.critical(self, t('error', self.lang), str(e))
             return
 
         invalid = [n for n, c, r in entries if n and not safe_nick(n)]
         if invalid:
-            QMessageBox.warning(self, t("error", self.lang),
-                                t("validation_invalid_nicks", self.lang) + "\n" + "\n".join(invalid))
+            QMessageBox.warning(self, t('error', self.lang),
+                                t('validation_invalid_nicks', self.lang) + "\n" + "\n".join(invalid))
 
         lines = self._format_lines(group, entries)
         path_text = self.path_edit.text().strip()
@@ -570,39 +642,39 @@ class WarlistEditor(QWidget):
     def undo_last(self):
         file_path = Path(self.path_edit.text().strip())
         if not file_path.exists():
-            QMessageBox.warning(self, t("error", self.lang), t("undo_file_missing", self.lang))
+            QMessageBox.warning(self, t('error', self.lang), t('undo_file_missing', self.lang))
             return
         bak = self._read_last_backup_meta(file_path) or getattr(self, '_last_backup', None)
         if not bak or not Path(bak).exists():
-            QMessageBox.information(self, t("undo", self.lang), t("undo_no_backup", self.lang))
+            QMessageBox.information(self, t('undo', self.lang), t('undo_no_backup', self.lang))
             return
-        reply = QMessageBox.question(self, t("undo", self.lang), f'{t("undo_confirm", self.lang)}?\n{bak}',
+        reply = QMessageBox.question(self, t('undo', self.lang), f'{t('undo_confirm', self.lang)}?\n{bak}',
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
         try:
             shutil.copy2(bak, file_path)
             self.log.append(f'Откат выполнен: {bak} -> {file_path}')
-            QMessageBox.information(self, t("done", self.lang), t("done", self.lang))
+            QMessageBox.information(self, t('done', self.lang), t('done', self.lang))
         except Exception as e:
-            QMessageBox.critical(self, t("error", self.lang), str(e))
+            QMessageBox.critical(self, t('error', self.lang), str(e))
 
     def add_to_file(self):
-        reply = QMessageBox.question(self, t("confirm_continue", self.lang), t("confirm_continue", self.lang),
+        reply = QMessageBox.question(self, t('confirm_continue', self.lang), t('confirm_continue', self.lang),
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
 
         file_path_text = self.path_edit.text().strip()
         if not file_path_text:
-            QMessageBox.warning(self, t("error", self.lang), t("no_file", self.lang))
+            QMessageBox.warning(self, t('error', self.lang), t('no_file', self.lang))
             return
         file_path = Path(file_path_text)
 
         try:
             group, entries = self._gather_entries()
         except Exception as e:
-            QMessageBox.critical(self, t("error", self.lang), str(e))
+            QMessageBox.critical(self, t('error', self.lang), str(e))
             return
 
         valid_entries = []
@@ -613,11 +685,11 @@ class WarlistEditor(QWidget):
             else:
                 valid_entries.append((nick, clan, reason))
         if invalid:
-            QMessageBox.warning(self, t("error", self.lang),
-                                t("validation_skipped_invalid", self.lang) + "\n" + "\n".join(invalid))
+            QMessageBox.warning(self, t('error', self.lang),
+                                t('validation_skipped_invalid', self.lang) + "\n" + "\n".join(invalid))
 
         if not valid_entries:
-            QMessageBox.information(self, t("nothing_to_write", self.lang), t("nothing_to_write", self.lang))
+            QMessageBox.information(self, t('nothing_to_write', self.lang), t('nothing_to_write', self.lang))
             return
 
         if not self._is_cactus():
@@ -631,18 +703,18 @@ class WarlistEditor(QWidget):
             to_write = []
             skipped = []
             for nick, clan, reason in valid_entries:
-                key = (group, nick.casefold(), clan.casefold())
+                key = (self.group_box.currentText(), nick.casefold(), clan.casefold())
                 if key in existing:
                     skipped.append((nick, clan))
                 else:
                     to_write.append((nick, clan, reason))
 
             if not to_write:
-                QMessageBox.information(self, t("nothing_to_write", self.lang), t("nothing_to_write", self.lang))
+                QMessageBox.information(self, t('nothing_to_write', self.lang), t('nothing_to_write', self.lang))
                 self.log.append('Новые записи не найдены - ничего не записано.')
                 return
 
-            lines = self._format_lines(group, to_write)
+            lines = self._format_lines(self.group_box.currentText(), to_write)
 
             try:
                 if self.backup_checkbox.isChecked() and file_path.exists():
@@ -653,7 +725,7 @@ class WarlistEditor(QWidget):
                     for ln in lines:
                         f.write(ln + '\n')
 
-                msg = f'{t("done", self.lang)}: {len(lines)} записей добавлено.'
+                msg = f'{t('done', self.lang)}: {len(lines)} записей добавлено.'
                 if skipped:
                     msg += f' Пропущено дубликатов: {len(skipped)}.'
                     self.log.append('\n-- Пропущенные дубликаты:')
@@ -661,9 +733,9 @@ class WarlistEditor(QWidget):
                         self.log.append(f'{nick} ({clan})')
 
                 self.log.append(f'Записано {len(lines)} строк в {file_path}')
-                QMessageBox.information(self, t("done", self.lang), msg)
+                QMessageBox.information(self, t('done', self.lang), msg)
             except Exception as e:
-                QMessageBox.critical(self, t("error", self.lang), str(e))
+                QMessageBox.critical(self, t('error', self.lang), str(e))
 
         else:
             try:
@@ -686,7 +758,7 @@ class WarlistEditor(QWidget):
                 cur.execute(
                     "CREATE TABLE IF NOT EXISTS wars (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, state INTEGER, reason TEXT)")
                 state_map = {'enemy': 1, 'team': 3}
-                st = state_map.get(group, 1)
+                st = state_map.get(self.group_box.currentText(), 1)
 
                 inserted = 0
                 skipped = 0
@@ -703,11 +775,11 @@ class WarlistEditor(QWidget):
                 conn.commit()
                 conn.close()
 
-                msg = f'{t("done", self.lang)}: добавлено {inserted}. Пропущено дубликатов: {skipped}.'
+                msg = f'{t('done', self.lang)}: добавлено {inserted}. Пропущено дубликатов: {skipped}.'
                 self.log.append(msg)
-                QMessageBox.information(self, t("done", self.lang), msg)
+                QMessageBox.information(self, t('done', self.lang), msg)
             except Exception as e:
-                QMessageBox.critical(self, t("error", self.lang), str(e))
+                QMessageBox.critical(self, t('error', self.lang), str(e))
 
     def _bg_check_update(self):
         success, data = check_github_latest()
@@ -726,7 +798,7 @@ class WarlistEditor(QWidget):
     def _check_update_and_notify(self):
         success, data = check_github_latest()
         if not success:
-            QMessageBox.information(self, t("check_updates", self.lang), f'Не удалось проверить обновления:\n{data}')
+            QMessageBox.information(self, t('check_updates', self.lang), f'Не удалось проверить обновления:\n{data}')
             return
         tag = data.get('tag_name')
         url = data.get('html_url') or REPO_PAGE
@@ -734,281 +806,81 @@ class WarlistEditor(QWidget):
             latest = _parse_version_tag(tag)
             current = _parse_version_tag(__version__)
             if latest and latest > current:
-                resp = QMessageBox.question(self, t("update_available", self.lang),
-                                            f'{t("update_available", self.lang)} {tag} (текущая: {__version__}). {t("update_open_repo", self.lang)}',
+                resp = QMessageBox.question(self, t('update_available', self.lang),
+                                            f'{t('update_available', self.lang)} {tag} (текущая: {__version__}). {t('update_open_repo', self.lang)}',
                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                 if resp == QMessageBox.StandardButton.Yes:
                     webbrowser.open(url)
             else:
-                QMessageBox.information(self, t("check_updates", self.lang), 'У вас последняя версия.')
+                QMessageBox.information(self, t('check_updates', self.lang), 'У вас последняя версия.')
         else:
-            QMessageBox.information(self, t("check_updates", self.lang), 'Не удалось получить информацию о релизе.')
+            QMessageBox.information(self, t('check_updates', self.lang), 'Не удалось получить информацию о релизе.')
 
     def apply_theme(self):
-        if self.theme == "dark":
-            stylesheet = """
-                QWidget { 
-                    background: #1a1a1a; 
-                    color: #ffffff; 
-                    font-family: "Segoe UI", Arial; 
-                    font-size: 9pt;
-                }
-                QGroupBox { 
-                    background: #2d2d2d; 
-                    border: 1px solid #404040; 
-                    border-radius: 6px; 
-                    margin-top: 8px; 
-                    padding: 8px;
-                    font-weight: bold;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    left: 8px;
-                    padding: 0 4px 0 4px;
-                    color: #ffffff;
-                }
-                QLabel { 
-                    color: #ffffff; 
-                    background: transparent;
-                }
-                QLineEdit, QTextEdit, QComboBox { 
-                    background: #383838; 
-                    border: 1px solid #555555; 
-                    color: #ffffff; 
-                    padding: 4px; 
-                    border-radius: 4px;
-                    selection-background-color: #0078d4;
-                }
-                QTextEdit { 
-                    selection-background-color: #0078d4;
-                }
-                QComboBox::drop-down {
-                    border: none;
-                    width: 20px;
-                }
-                QComboBox::down-arrow {
-                    border: 2px solid #888888;
-                    border-top-color: transparent;
-                    border-left-color: transparent;
-                    border-right-color: transparent;
-                    width: 0px;
-                    height: 0px;
-                }
-                QPushButton { 
-                    background: #404040; 
-                    color: #ffffff; 
-                    border: 1px solid #555555; 
-                    padding: 6px 12px; 
-                    border-radius: 4px;
-                    font-weight: bold;
-                }
-                QPushButton:hover { 
-                    background: #505050; 
-                    border-color: #666666;
-                }
-                QPushButton:pressed {
-                    background: #353535;
-                }
-                QRadioButton, QCheckBox { 
-                    color: #ffffff;
-                    spacing: 8px;
-                }
-                QRadioButton::indicator, QCheckBox::indicator {
-                    width: 16px;
-                    height: 16px;
-                }
-                QRadioButton::indicator::unchecked {
-                    border: 2px solid #555555;
-                    border-radius: 8px;
-                    background: #2d2d2d;
-                }
-                QRadioButton::indicator::checked {
-                    border: 2px solid #0078d4;
-                    border-radius: 8px;
-                    background: #0078d4;
-                }
-                QCheckBox::indicator::unchecked {
-                    border: 2px solid #555555;
-                    background: #2d2d2d;
-                }
-                QCheckBox::indicator::checked {
-                    border: 2px solid #0078d4;
-                    background: #0078d4;
-                }
-                QScrollBar:vertical {
-                    background: #2d2d2d;
-                    width: 12px;
-                    border-radius: 6px;
-                }
-                QScrollBar::handle:vertical {
-                    background: #555555;
-                    border-radius: 6px;
-                    min-height: 20px;
-                }
-                QScrollBar::handle:vertical:hover {
-                    background: #666666;
-                }
+        # modernized stylesheet with an accent color and consistent paddings
+        accent = '#0078d4'
+        if self.theme == 'dark':
+            stylesheet = f"""
+            QWidget {{ background: #0f1113; color: #e6eef8; font-family: 'Segoe UI', Arial; font-size: 10pt; }}
+            QGroupBox {{ background: #151719; border: 1px solid #232629; border-radius: 8px; margin-top: 6px; padding: 8px; font-weight: 600; }}
+            QLabel {{ color: #e6eef8 }}
+            QLineEdit, QPlainTextEdit, QTextEdit, QComboBox {{ background: #0f1316; border: 1px solid #2b3134; color: #e6eef8; padding: 6px; border-radius: 6px; selection-background-color: {accent}; }}
+            QPushButton {{ background: #1b1f22; color: #e6eef8; border: 1px solid #2b3134; padding: 8px 14px; border-radius: 8px; font-weight: 700; }}
+            QPushButton:hover {{ background: #22272a }}
+            QPushButton:pressed {{ background: #121415 }}
+            QComboBox::drop-down {{ border: none }}
+            QScrollBar:vertical {{ background: transparent; width: 10px }}
+            QScrollBar::handle:vertical {{ background: #2b3134; border-radius: 5px; min-height: 20px }}
             """
         else:
-            stylesheet = """
-                QWidget { 
-                    background: #ffffff; 
-                    color: #000000; 
-                    font-family: "Segoe UI", Arial;
-                    font-size: 9pt;
-                }
-                QGroupBox { 
-                    background: #f8f9fa; 
-                    border: 1px solid #dee2e6; 
-                    border-radius: 6px; 
-                    margin-top: 8px; 
-                    padding: 8px;
-                    font-weight: bold;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    left: 8px;
-                    padding: 0 4px 0 4px;
-                    color: #000000;
-                }
-                QLabel { 
-                    color: #000000;
-                    background: transparent;
-                }
-                QLineEdit, QTextEdit, QComboBox { 
-                    background: #ffffff; 
-                    border: 1px solid #ced4da; 
-                    color: #000000; 
-                    padding: 4px; 
-                    border-radius: 4px;
-                    selection-background-color: #0078d4;
-                }
-                QTextEdit { 
-                    selection-background-color: #b3d7ff;
-                }
-                QComboBox::drop-down {
-                    border: none;
-                    width: 20px;
-                }
-                QComboBox::down-arrow {
-                    border: 2px solid #666666;
-                    border-top-color: transparent;
-                    border-left-color: transparent;
-                    border-right-color: transparent;
-                    width: 0px;
-                    height: 0px;
-                }
-                QPushButton { 
-                    background: #e9ecef; 
-                    color: #000000; 
-                    border: 1px solid #ced4da; 
-                    padding: 6px 12px; 
-                    border-radius: 4px;
-                    font-weight: bold;
-                }
-                QPushButton:hover { 
-                    background: #f8f9fa; 
-                    border-color: #adb5bd;
-                }
-                QPushButton:pressed {
-                    background: #dee2e6;
-                }
-                QRadioButton, QCheckBox { 
-                    color: #000000;
-                    spacing: 8px;
-                }
-                QRadioButton::indicator, QCheckBox::indicator {
-                    width: 16px;
-                    height: 16px;
-                }
-                QRadioButton::indicator::unchecked {
-                    border: 2px solid #ced4da;
-                    border-radius: 8px;
-                    background: #ffffff;
-                }
-                QRadioButton::indicator::checked {
-                    border: 2px solid #0078d4;
-                    border-radius: 8px;
-                    background: #0078d4;
-                }
-                QCheckBox::indicator::unchecked {
-                    border: 2px solid #ced4da;
-                    background: #ffffff;
-                }
-                QCheckBox::indicator::checked {
-                    border: 2px solid #0078d4;
-                    background: #0078d4;
-                }
-                QScrollBar:vertical {
-                    background: #f8f9fa;
-                    width: 12px;
-                    border-radius: 6px;
-                }
-                QScrollBar::handle:vertical {
-                    background: #ced4da;
-                    border-radius: 6px;
-                    min-height: 20px;
-                }
-                QScrollBar::handle:vertical:hover {
-                    background: #adb5bd;
-                }
+            stylesheet = f"""
+            QWidget {{ background: #fbfdff; color: #1a1a1a; font-family: 'Segoe UI', Arial; font-size: 10pt; }}
+            QGroupBox {{ background: #ffffff; border: 1px solid #e6ebf0; border-radius: 8px; margin-top: 6px; padding: 8px; font-weight: 600; }}
+            QLabel {{ color: #1a1a1a }}
+            QLineEdit, QPlainTextEdit, QTextEdit, QComboBox {{ background: #ffffff; border: 1px solid #dfe7ee; color: #1a1a1a; padding: 6px; border-radius: 6px; selection-background-color: {accent}; }}
+            QPushButton {{ background: #f0f4f8; color: #1a1a1a; border: 1px solid #dfe7ee; padding: 8px 14px; border-radius: 8px; font-weight: 700; }}
+            QPushButton:hover {{ background: #e9f1fb }}
+            QPushButton:pressed {{ background: #dfeaf7 }}
+            QComboBox::drop-down {{ border: none }}
+            QScrollBar:vertical {{ background: transparent; width: 10px }}
+            QScrollBar::handle:vertical {{ background: #cfdbe6; border-radius: 5px; min-height: 20px }}
             """
         self.setStyleSheet(stylesheet)
 
     def _on_theme_changed(self, idx):
-        self.theme = "dark" if idx == 0 else "light"
+        self.theme = 'dark' if idx == 0 else 'light'
         self.apply_theme()
 
     def _on_language_changed(self, idx):
-        self.lang = "ru" if idx == 0 else "en"
+        self.lang = 'ru' if idx == 0 else 'en'
         self._retranslate_ui()
 
     def _retranslate_ui(self):
-        self.setWindowTitle(f'{t("title", self.lang)} - {__version__}')
-        self.title_label.setText(t("title", self.lang))
-
-        self.lbl_client.setText(t("client", self.lang))
-        self.lbl_path.setText(t("path", self.lang))
-        self.browse_btn.setText(t("choose_file", self.lang))
-
-        self.mode_group_box.setTitle(t("mode", self.lang))
-        self.single_radio.setText(t("single", self.lang))
-        self.multi_radio.setText(t("multi", self.lang))
-
-        self.single_box.setTitle(t("single", self.lang))
-        self.lbl_single_nick.setText(t("nick", self.lang))
-        self.lbl_single_clan.setText(t("clan", self.lang))
-        self.lbl_single_reason.setText(t("reason", self.lang))
-
-        if self.lang == "ru":
-            self.single_nick.setPlaceholderText(t("nick", self.lang) + " (например: Player123)")
-        else:
-            self.single_nick.setPlaceholderText(t("nick", self.lang) + " (e.g. Player123)")
-        self.single_clan.setPlaceholderText(t("clan", self.lang))
-        self.single_reason.setPlaceholderText(t("reason", self.lang))
-
-        self.multi_box.setTitle(t("multi", self.lang))
-        self.multi_text.setPlaceholderText(t("multi_hint", self.lang))
-        self.lbl_multi_reason.setText(t("multi_reason_label", self.lang))
-        self.lbl_multi_clan.setText(t("multi_clan_label", self.lang))
-        self.multi_reason.setPlaceholderText(t("reason", self.lang))
-        self.multi_clan.setPlaceholderText(t("multi_clan_label", self.lang))
-
-        self.lbl_group.setText(t("group", self.lang))
-        self.backup_checkbox.setText(t("backup", self.lang))
-
-        self.preview_btn.setText(t("preview", self.lang))
-        self.add_btn.setText(t("add", self.lang))
-        self.undo_btn.setText(t("undo", self.lang))
-        self.update_btn.setText(t("check_updates", self.lang))
-
-        self.lbl_log.setText(t("log_preview", self.lang))
-        self.help_label.setText(t("footer_hint", self.lang))
-        self.watermark.setText(t("byline", self.lang))
-
-        self.theme_combo.setItemText(0, t("theme_dark", self.lang))
-        self.theme_combo.setItemText(1, t("theme_light", self.lang))
-
+        # minimal retranslation - keep layout but update labels
+        self.setWindowTitle(f'{t('title', self.lang)} - {__version__}')
+        self.lbl_client.setText(t('client', self.lang))
+        self.lbl_path.setText(t('path', self.lang))
+        self.browse_btn.setText(t('choose_file', self.lang))
+        self.mode_group = t('mode', self.lang)
+        self.single_radio.setText(t('single', self.lang))
+        self.multi_radio.setText(t('multi', self.lang))
+        self.single_nick.setPlaceholderText(t('nick', self.lang) + (' (например: Player123)' if self.lang == 'ru' else ' (e.g. Player123)'))
+        self.single_clan.setPlaceholderText(t('clan', self.lang))
+        self.single_reason.setPlaceholderText(t('reason', self.lang))
+        self.multi_text.setPlaceholderText(t('multi_hint', self.lang))
+        self.multi_reason.setPlaceholderText(t('reason', self.lang))
+        self.multi_clan.setPlaceholderText(t('multi_clan_label', self.lang))
+        self.lbl_group.setText(t('group', self.lang))
+        self.backup_checkbox.setText(t('backup', self.lang))
+        self.preview_btn.setText(t('preview', self.lang))
+        self.add_btn.setText(t('add', self.lang))
+        self.undo_btn.setText(t('undo', self.lang))
+        self.update_btn.setText(t('check_updates', self.lang))
+        self.lbl_log.setText(t('log_preview', self.lang))
+        self.help_label.setText(t('footer_hint', self.lang))
+        self.watermark.setText(t('byline', self.lang))
+        self.theme_combo.setItemText(0, t('theme_dark', self.lang))
+        self.theme_combo.setItemText(1, t('theme_light', self.lang))
         self._set_path_placeholder()
 
 
