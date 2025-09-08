@@ -648,7 +648,8 @@ class WarlistEditor(QWidget):
         if not bak or not Path(bak).exists():
             QMessageBox.information(self, t('undo', self.lang), t('undo_no_backup', self.lang))
             return
-        reply = QMessageBox.question(self, t('undo', self.lang), f'{t('undo_confirm', self.lang)}?\n{bak}',
+        msg = f"{t('undo_confirm', self.lang)}?\n{bak}"
+        reply = QMessageBox.question(self, t('undo', self.lang), msg,
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
@@ -725,9 +726,10 @@ class WarlistEditor(QWidget):
                     for ln in lines:
                         f.write(ln + '\n')
 
-                msg = f'{t('done', self.lang)}: {len(lines)} записей добавлено.'
+                msg = f"{t('done', self.lang)}: {len(lines)} записей добавлено."
                 if skipped:
-                    msg += f' Пропущено дубликатов: {len(skipped)}.'
+                    msg += f" Пропущено дубликатов: {len(skipped)}."
+
                     self.log.append('\n-- Пропущенные дубликаты:')
                     for nick, clan in skipped:
                         self.log.append(f'{nick} ({clan})')
@@ -775,7 +777,7 @@ class WarlistEditor(QWidget):
                 conn.commit()
                 conn.close()
 
-                msg = f'{t('done', self.lang)}: добавлено {inserted}. Пропущено дубликатов: {skipped}.'
+                msg = f"{t('done', self.lang)}: добавлено {inserted}. Пропущено дубликатов: {skipped}."
                 self.log.append(msg)
                 QMessageBox.information(self, t('done', self.lang), msg)
             except Exception as e:
@@ -806,9 +808,12 @@ class WarlistEditor(QWidget):
             latest = _parse_version_tag(tag)
             current = _parse_version_tag(__version__)
             if latest and latest > current:
-                resp = QMessageBox.question(self, t('update_available', self.lang),
-                                            f'{t('update_available', self.lang)} {tag} (текущая: {__version__}). {t('update_open_repo', self.lang)}',
-                                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                resp = QMessageBox.question(
+                    self,
+                    t('update_available', self.lang),
+                    f"{t('update_available', self.lang)} {tag} (текущая: {__version__}). {t('update_open_repo', self.lang)}",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
                 if resp == QMessageBox.StandardButton.Yes:
                     webbrowser.open(url)
             else:
@@ -857,7 +862,7 @@ class WarlistEditor(QWidget):
 
     def _retranslate_ui(self):
         # minimal retranslation - keep layout but update labels
-        self.setWindowTitle(f'{t('title', self.lang)} - {__version__}')
+        self.setWindowTitle(f"{t('title', self.lang)} - {__version__}")
         self.lbl_client.setText(t('client', self.lang))
         self.lbl_path.setText(t('path', self.lang))
         self.browse_btn.setText(t('choose_file', self.lang))
