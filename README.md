@@ -1,4 +1,4 @@
-# DDNet Warlist Editor v1.2
+# DDNet Warlist Editor v1.1
 
 **DDNet Редактор списков войны** — удобный графический интерфейс для управления списками врагов и союзников в DDNet (Tater Client и Cactus Client).
 
